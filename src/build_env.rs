@@ -37,17 +37,30 @@ impl BuildEnv {
         }
     }
 
-    pub fn from_config(source_dir: &Path, config: &Path, makeconf: Option<&Path>) -> Self {
-        let temp_dir = tempdir().expect("Unable to create temporary build dir.");
-        // The B= options requires a non-existing directory.
-        let build_dir = temp_dir.path().join("build");
-        // Initialize build directory.
-        let mut build_dir_arg = OsString::from("B=");
-        build_dir_arg.push(build_dir.as_os_str());
-        check_cmd(
-            new_make_cmd().arg(&build_dir_arg).current_dir(source_dir),
-            "Unable to initialize temporary build dir.",
-        );
+    pub fn from_config(
+        source_dir: &Path,
+        config: &Path,
+        makeconf: Option<&Path>,
+        stable_dir: Option<&Path>,
+    ) -> Self {
+        let (temp_dir, build_dir) = if let Some(stable_build_dir) = stable_dir {
+            (None, stable_build_dir.to_owned())
+        } else {
+            let temp_dir = tempdir().expect("Unable to create temporary build dir.");
+            let build_dir = temp_dir.path().join("build");
+            (Some(temp_dir), build_dir)
+        };
+
+        if !build_dir.is_dir() {
+            // Initialize build directory.
+            // The B= options requires a non-existing directory.
+            let mut build_dir_arg = OsString::from("B=");
+            build_dir_arg.push(build_dir.as_os_str());
+            check_cmd(
+                new_make_cmd().arg(&build_dir_arg).current_dir(source_dir),
+                "Unable to initialize (temporary) build dir.",
+            );
+        }
 
         // Configure build directory.
         fs::copy(config, build_dir.join("globalconfig.out")).expect("Unable to copy config.");
@@ -66,7 +79,7 @@ impl BuildEnv {
             build_dir,
             source_dir: source_dir.to_path_buf(),
             config: config.to_path_buf(),
-            _temp_dir: Some(temp_dir),
+            _temp_dir: temp_dir,
         }
     }
 

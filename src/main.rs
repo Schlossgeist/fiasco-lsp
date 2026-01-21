@@ -47,6 +47,8 @@ struct Cli {
     fiasco_config: Option<PathBuf>,
     #[clap(long, requires = "fiasco_config")]
     makeconf: Option<PathBuf>,
+    #[clap(long, requires = "fiasco_config")]
+    stable_dir: Option<PathBuf>,
     /// Connect to LSP editor on port.
     #[clap(long)]
     connect: Option<u16>,
@@ -76,6 +78,7 @@ fn main() -> Result<()> {
             &cli.fiasco_dir.unwrap(),
             &cli.fiasco_config.unwrap(),
             cli.makeconf.as_deref(),
+            cli.stable_dir.as_deref(),
         ),
     };
     debug!("Build directory: {}", build_env.build_dir.to_string_lossy());
