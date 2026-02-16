@@ -6,3 +6,4 @@ pub mod document_sync;
 pub mod goto;
 pub mod inlay_hint;
 pub mod source_location;
+pub mod workspace_symbol;
