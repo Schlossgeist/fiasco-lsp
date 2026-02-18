@@ -74,10 +74,11 @@ impl FiascoSourceMapping {
         position: &mut Position,
     ) {
         let mapped = self.map(direction, path, position.line, position.character);
-
-        *path = mapped.path.to_str().unwrap().to_owned();
-        position.line = mapped.line;
-        position.character = mapped.character;
+        if let Some(mapped) = mapped {
+            *path = mapped.path.to_str().unwrap().to_owned();
+            position.line = mapped.line;
+            position.character = mapped.character;
+        }
     }
 
     pub fn map_position_uri(
@@ -99,20 +100,26 @@ impl FiascoSourceMapping {
         range: &mut Range,
     ) -> Result<(), ()> {
         let mapped_start = self.map(direction, path, range.start.line, range.start.character);
-
         let mapped_end = self.map(direction, path, range.end.line, range.end.character);
 
-        if mapped_start.path != mapped_end.path {
-            debug!("Range mapping across source files: {:?} vs. {:?}", &mapped_start, &mapped_end);
-            return Err(());
+        if let (Some(mapped_start), Some(mapped_end)) = (mapped_start, mapped_end) {
+            if mapped_start.path != mapped_end.path {
+                debug!(
+                    "Range mapping across source files: {:?} vs. {:?}",
+                    &mapped_start, &mapped_end
+                );
+                return Err(());
+            }
+
+            *path = mapped_start.path.to_str().unwrap().to_owned();
+            range.start.line = mapped_start.line;
+            range.start.character = mapped_start.character;
+            range.end.line = mapped_end.line;
+            range.end.character = mapped_end.character;
+            return Ok(());
         }
 
-        *path = mapped_start.path.to_str().unwrap().to_owned();
-        range.start.line = mapped_start.line;
-        range.start.character = mapped_start.character;
-        range.end.line = mapped_end.line;
-        range.end.character = mapped_end.character;
-        Ok(())
+        Err(())
     }
 
     pub fn map_range_uri(

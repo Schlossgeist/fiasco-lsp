@@ -232,7 +232,7 @@ impl FiascoSourceMapping {
         path: &str,
         line: u32,
         character: u32,
-    ) -> SourceLocation {
+    ) -> Option<SourceLocation> {
         let line_mappings = self.get(direction);
         // TODO: Priority to use here? Might depend on use case...
         let mapping =
@@ -244,13 +244,13 @@ impl FiascoSourceMapping {
         match mapping {
             None => {
                 debug!("No mapping found for Line {} ({})", line, path);
-                SourceLocation { path: PathBuf::from(path), line, character }
+                None
             }
-            Some(mapping) => SourceLocation {
+            Some(mapping) => Some(SourceLocation {
                 path: mapping.dst_file.clone(),
                 line: mapping.dst_line + (line - mapping.src_line),
                 character,
-            },
+            }),
         }
     }
 
@@ -455,12 +455,14 @@ mod tests {
         .unwrap();
 
         env_logger::init();
-        let mut mapped = source_mapping.map(
-            MapDirection::ToPreprocess,
-            "/home/george/kk/dev/l4re/fiasco/src/kern/arm/cpu-arm.cpp",
-            367,
-            10,
-        );
+        let mut mapped = source_mapping
+            .map(
+                MapDirection::ToPreprocess,
+                "/home/george/kk/dev/l4re/fiasco/src/kern/arm/cpu-arm.cpp",
+                367,
+                10,
+            )
+            .expect("Valid mapping.");
         mapped.line += 1;
         mapped.character += 1;
         println!("{:?}", mapped);
