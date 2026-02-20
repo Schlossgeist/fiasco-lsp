@@ -15,7 +15,8 @@ pub fn handle_res_goto(
     let mut result = res?;
     match &mut result {
         GotoDefinitionResponse::Scalar(location) => {
-            state.source_mapping.map_location(FromPreprocess, location);
+            // TODO: Pass-through or ignore on map failure?
+            let _ = state.source_mapping.map_location(FromPreprocess, location);
         }
         GotoDefinitionResponse::Array(vec) => vec.retain_mut(|location| {
             state.source_mapping.map_location(FromPreprocess, location).is_ok()
@@ -23,7 +24,7 @@ pub fn handle_res_goto(
         GotoDefinitionResponse::Link(vec) => vec.retain_mut(|location| {
             let mut path = mapped_file.clone();
             if let Some(origin_selection_range) = location.origin_selection_range.as_mut() {
-                state.source_mapping.map_range(FromPreprocess, &mut path, origin_selection_range);
+                let _ = state.source_mapping.map_range(FromPreprocess, &mut path, origin_selection_range);
                 if source_path != path {
                     warn!(
                         "GotoRequest: Origin selection mapped to different file ({}) than source file specified in request ({}).",
