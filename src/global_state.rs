@@ -68,7 +68,7 @@ impl ReqContextAlloc {
 pub struct GlobalState {
     pub client: Connection,
     pub server: LanguageServerTransport,
-    logger: Logger,
+    logger: Option<Logger>,
     pub source_mapping: FiascoSourceMapping,
     pub open_files: HashMap<PathBuf, u32>,
     pub client_reqs: RequestRegistry,
@@ -80,7 +80,7 @@ impl GlobalState {
     pub fn new(
         client: Connection,
         server: LanguageServerTransport,
-        logger: Logger,
+        logger: Option<Logger>,
         source_mapping: FiascoSourceMapping,
     ) -> GlobalState {
         GlobalState {
@@ -96,7 +96,9 @@ impl GlobalState {
     }
 
     pub fn log_from_server(&mut self, msg: &lsp_server::Message) -> Result<()> {
-        self.logger.send(Direction::FromServer, msg)?;
+        if let Some(logger) = &mut self.logger {
+            logger.send(Direction::FromServer, msg)?;
+        }
         Ok(())
     }
 
@@ -105,7 +107,9 @@ impl GlobalState {
         M: Into<lsp_server::Message>,
     {
         let msg = m.into();
-        self.logger.send(Direction::ToServer, &msg)?;
+        if let Some(logger) = &mut self.logger {
+            logger.send(Direction::ToServer, &msg)?;
+        }
         self.server.to_lang_server.sender().send(msg)?;
         Ok(())
     }

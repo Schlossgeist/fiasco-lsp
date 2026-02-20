@@ -25,18 +25,18 @@ impl Direction {
 }
 
 impl Logger {
-    pub fn spawn() -> Logger {
+    pub fn spawn(port: u16) -> Logger {
         let (sender, receiver) = bounded(1024);
         info!("Spawn logger!");
         spawn({
             let receiver = receiver.clone();
-            move || Self::log_socket_handler(receiver)
+            move || Self::log_socket_handler(receiver, port)
         });
         Logger { sender, receiver }
     }
 
-    fn log_socket_handler(receiver: Receiver<String>) {
-        let server = TcpListener::bind("127.0.0.1:9981").unwrap();
+    fn log_socket_handler(receiver: Receiver<String>, port: u16) {
+        let server = TcpListener::bind(("127.0.0.1", port)).unwrap();
         loop {
             let do_accept = |reconnect| {
                 if reconnect {

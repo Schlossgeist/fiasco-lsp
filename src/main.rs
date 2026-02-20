@@ -55,9 +55,9 @@ struct Cli {
     /// Listen for LSP editor on port.
     #[clap(long)]
     listen: Option<u16>,
-    // TODO: Make websocket logger configurable.
     // TODO: Log client requests/answers to logger?!
-    // websocket_logger: Option<u16>,
+    #[clap(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "9981")]
+    websocket_logger: Option<u16>,
 }
 
 fn main() -> Result<()> {
@@ -69,7 +69,11 @@ fn main() -> Result<()> {
     // Note that  we must have our logging only write out to stderr.
     info!("Fiasco LSP Proxy");
 
-    let logger = Logger::spawn();
+    let logger = if let Some(logger_port) = cli.websocket_logger {
+        Some(Logger::spawn(logger_port))
+    } else {
+        None
+    };
 
     info!("Initialize build directory");
     let build_env = match cli.build_dir {
