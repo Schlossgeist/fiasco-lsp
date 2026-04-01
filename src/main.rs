@@ -326,8 +326,7 @@ impl GlobalState {
         use lsp_types::request::*;
         RequestDispatcher { direction: FromServer, req: Some(req), state: self }
             .forward::<ShowMessageRequest>()
-            // TODO: WorkspaceEdit must be mapped
-            .forward::<ApplyWorkspaceEdit>()
+            .on::<ApplyWorkspaceEdit>(code_action::handle_server_req_workspace_edit)
             .forward::<WorkspaceFoldersRequest>()
             // TODO: Find out what needs to be done.
             .forward::<WorkspaceConfiguration>()

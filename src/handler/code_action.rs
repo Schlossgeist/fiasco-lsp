@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use lsp_types::{CodeActionOrCommand, CodeActionParams, CodeActionResponse};
+use lsp_types::{
+    ApplyWorkspaceEditParams, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
+    WorkspaceEdit,
+};
 
 use crate::global_state::{GlobalState, ReqContext};
 use crate::source_mapping::MapDirection::{FromPreprocess, ToPreprocess};
@@ -56,6 +59,26 @@ pub fn handle_req_code_action(
     params
 }
 
+fn map_workspace_edit(state: &mut GlobalState, edit: &mut WorkspaceEdit) {
+    if let Some(changes) = edit.changes.take() {
+        let mut mapped_changes = HashMap::new();
+        for (url, text_edits) in changes.into_iter() {
+            for mut text_edit in text_edits {
+                let mut edit_url = url.clone();
+                if state
+                    .source_mapping
+                    .map_range_uri(FromPreprocess, &mut edit_url, &mut text_edit.range)
+                    .is_ok()
+                {
+                    mapped_changes.entry(edit_url).or_insert(Vec::new()).push(text_edit);
+                }
+            }
+        }
+        edit.changes.replace(mapped_changes);
+    }
+    // TODO: document_changes and change_annotations
+}
+
 pub fn handle_res_code_action(
     state: &mut GlobalState,
     req_context: &mut ReqContext,
@@ -69,26 +92,7 @@ pub fn handle_res_code_action(
     for cc in &mut result {
         if let CodeActionOrCommand::CodeAction(action) = cc {
             if let Some(edit) = &mut action.edit {
-                if let Some(changes) = edit.changes.take() {
-                    let mut mapped_changes = HashMap::new();
-                    for (url, text_edits) in changes.into_iter() {
-                        for mut text_edit in text_edits {
-                            let mut edit_url = url.clone();
-                            if state
-                                .source_mapping
-                                .map_range_uri(FromPreprocess, &mut edit_url, &mut text_edit.range)
-                                .is_ok()
-                            {
-                                mapped_changes
-                                    .entry(edit_url)
-                                    .or_insert(Vec::new())
-                                    .push(text_edit);
-                            }
-                        }
-                    }
-                    edit.changes.replace(mapped_changes);
-                }
-                // TODO: document_changes and change_annotations
+                map_workspace_edit(state, edit);
             }
 
             // Map diagnostics in CodeAction
@@ -120,4 +124,13 @@ pub fn handle_res_code_action(
         };
     }
     Some(result)
+}
+
+pub fn handle_server_req_workspace_edit(
+    state: &mut GlobalState,
+    _: &mut ReqContext,
+    mut params: ApplyWorkspaceEditParams,
+) -> ApplyWorkspaceEditParams {
+    map_workspace_edit(state, &mut params.edit);
+    params
 }
