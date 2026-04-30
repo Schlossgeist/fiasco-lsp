@@ -99,12 +99,13 @@ impl FileLineMappings {
         self.implementation.sort_by_key(|l| l.src_line);
     }
 
-    fn check(&self) {
+    fn check(&self, source: &Path) {
         let check_section = |section: &[LineMapping]| {
             section.windows(2).for_each(|w| {
                 assert!(
                     w[0].src_end_line <= w[1].src_line,
-                    "Ranges overlap: a = {:?}, b = {:?}",
+                    "Ranges overlap in {:?}: a = {:#?}, b = {:#?}",
+                    source,
                     w[0],
                     w[1]
                 )
@@ -159,11 +160,11 @@ impl FiascoSourceMapping {
     }
 
     fn check(&self) {
-        for mappings in self.to_preprocess.values() {
-            mappings.check()
+        for (path, mappings) in &self.to_preprocess {
+            mappings.check(&path)
         }
-        for mappings in self.from_preprocess.values() {
-            mappings.check()
+        for (path, mappings) in &self.from_preprocess {
+            mappings.check(&path)
         }
     }
 
