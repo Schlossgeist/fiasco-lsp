@@ -346,7 +346,7 @@ where
         }
     }
     if let Some(m) = mappings.last_mut() {
-        m.src_end_line = ln as u32 - ln_offset
+        m.src_end_line = max(m.src_line, ln as u32 - ln_offset)
     };
     mappings
 }
