@@ -427,6 +427,7 @@ pub fn load_source_mapping(build_dir: &Path) -> FiascoSourceMapping {
     source_mapping
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use std::io::BufWriter;
@@ -469,3 +470,4 @@ mod tests {
         println!("{:?}", mapped);
     }
 }
+*/

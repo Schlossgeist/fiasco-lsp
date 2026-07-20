@@ -1,0 +1,243 @@
+// This grammar serves as a formal definition of the Fiasco Preprocess
+// extension to the C++ language. The goal of this grammar is not to provide
+// a complete parser for C++ integrated with Fiasco's Preprocess (FPP) syntax.
+// C++ constructs are only parsed as far as FPP needs them, which is top-level
+// function/method/class/struct declarations for the most part.
+// Almost everything else is handled via 'valid character sequence'-rules,
+// which contain the parts that FPP copies verbatim.
+
+// === KEYWORDS ===
+// Keywords mark the special constructs of FPP and C++.
+// They are not allowed as identifiers.
+FPP_RESERVED = @{
+	  "EXTENSION"
+    | "IMPLEMENT" | "IMPLEMENT_DEFAULT" | "IMPLEMENT_OVERRIDE"
+    | "IMPLEMENTATION" | "INTERFACE"
+    | "NEEDS"
+    | "PRIVATE" | "PROTECTED" | "PUBLIC"
+}
+// This is only a list of C++ keywords that are relevant for FPP.
+// Common C++ keywords like `for` or `if` are therefore not included.
+CPP_RESERVED = @{
+	  "attribute"
+	| "class"
+    | "default"
+    | "delete"
+    | "extern"
+	| "inline"
+    | "operator"
+    | "static"
+    | "struct"
+    | "template"
+}
+RESERVED = @{ FPP_RESERVED | CPP_RESERVED }
+
+// === COMMENTS ===
+// Treated as whitespace.
+LINE_COMMENT = @{ "//" ~ (!NEWLINE ~ ANY)* }
+BLOCK_COMMENT = @{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+COMMENT = _{ LINE_COMMENT | BLOCK_COMMENT }
+
+WHITESPACE = _{ " " | "\t" | "\n" | COMMENT }
+
+// Everything inside chars and strings it treated as opaque
+// to enable parsing of balanced brackets.
+CHAR = @{ "'" ~ (!"'" ~ ANY) ~ "'" }
+STRING = @{ "\"" ~ (!"\"" ~ ANY)+ ~ "\"" }
+
+// === GRAMMAR ===
+translation_unit = {
+	  SOI
+    ~ declaration*
+    ~ (fpp_interface_section | fpp_implementation_section)*
+    ~ EOI
+}
+
+// If nothing else matches, copy the line verbatim.
+verbatim_copy = @{ (!(NEWLINE | FPP_RESERVED) ~ ANY)+ ~ NEWLINE }
+
+preprocess_line = @{ "#" ~ ("\\" ~ NEWLINE | !NEWLINE ~ ANY)* }
+extern_c = { "extern \"C\"" ~ balanced_block }
+
+declaration = _{
+      preprocess_line
+    | fpp_class_or_struct
+    | fpp_function
+    | fpp_method ~ ";"?
+    | extern_c
+    | verbatim_copy		// always last, just copy if no FPP construct matches
+}
+
+valid_char_seq = @{ !RESERVED ~ (non_digit ~ ("_" | digit | non_digit)*) }
+identifier = @{ valid_char_seq }
+identifier_tmplt = !{ identifier ~ balanced_angles? }
+quali_identifier_tmplt = @{ identifier_tmplt ~ ("::" ~ identifier_tmplt)* }
+
+fpp_extension_specifier = @{ "EXTENSION" }
+
+valid_class_or_struct_prefix_char_seq = { !("class" | "struct") ~ ("," | "*" | "&" | "->" | "\"" | "::" | "[" | "]" | "template" ~ balanced_angles | ("attribute" | "__attribute__") ~ balanced_parentheses | "<" | ">" | valid_char_seq) }
+valid_class_or_struct_suffix_char_seq = { !"{" ~ ("(" | ")" | "," | "*" | "&" | "->" | "\"" | ":" | "[" | "]" | "=" | "<" | ">" | valid_char_seq)+ }
+fpp_class_or_struct = {
+	  fpp_extension_specifier?
+	~ valid_class_or_struct_prefix_char_seq*
+	~ ("class" | "struct")
+	~ identifier
+    ~ (!"::" ~ ":" ~ valid_class_or_struct_suffix_char_seq*)?
+    ~ balanced_block?
+    ~ ";"
+}
+
+// The order matters here. Make sure that tokens which are prefixes of other
+// tokens are listed afterwards.
+overloadable_operators = _{
+      "->*" | "->"
+    | "++" | "+=" | "+"
+    | "--" | "-=" | "-" 
+    | "*=" | "*"
+    | "/=" | "/"
+    | "%=" | "%"
+    | "^=" | "^"
+    | "&&" | "&=" | "&"
+    | "||" | "|=" | "|"
+    | "~"
+    | "!=" | "!"
+    | "==" | "="
+    | "<=>"
+    | "<<=" | "<<" | "<=" | "<"
+    | ">>=" | ">>" | ">=" | ">"
+    | "," | "()" | "[]" | "new" ~ "[]"? | "delete" ~ "[]"?
+}
+operator = { "operator" ~ overloadable_operators }
+
+valid_function_prefix_char_seq = { !"typedef" ~ ("," | "*" | "&" | "->" | "\"" | "::" | "[[" | "]]" | "[" | "]" | "extern \"C\"" | "template" | ("attribute" | "__attribute__") ~ balanced_parentheses | "<" | ">" | "static" | valid_char_seq) ~ !"(" }
+valid_function_suffix_char_seq = { !"{" ~ ("(" | ")" | "," | "*" | "&" | "->" | "\"" | ":" | "[" | "]" | "=" | "<" | ">" | valid_char_seq)+ }
+return_type = { quali_identifier_tmplt ~ ("*" | "&")? }
+fpp_function = {
+	  ( "extern \"C\"" | template*)?
+    ~ attribute*
+    ~ "static"?
+    ~ "inline"?
+    ~ fpp_noexport?
+    ~ "constexpr"?
+    ~ fpp_dependency?
+	~ return_type
+    ~ (operator | identifier)
+    ~ balanced_parentheses ~ (!("{" | ";") ~ ANY)*
+    ~ (
+    	  balanced_block	// definition with function body
+        | ";"				// forward declaration
+      )
+}
+
+fpp_access_specifier = @{ "PRIVATE" | "PROTECTED" | "PUBLIC" }
+fpp_implement_specifier = { "IMPLEMENT_DEFAULT" | "IMPLEMENT_OVERRIDE" | "IMPLEMENT" }
+fpp_noexport = { "NOEXPORT" }
+fpp_dependency = { "NEEDS" ~ "[" ~ (!"]" ~ ANY)+ ~ "]" }
+valid_method_prefix_char_seq = _{ !fpp_method_core ~ valid_function_prefix_char_seq }
+fpp_parent_name = { identifier_tmplt ~ ("::" ~ identifier_tmplt ~ !"(")* ~ &"::" }
+fpp_method_name = { operator | (identifier_tmplt ~ &"(") }
+fpp_method_core = { fpp_parent_name ~ "::" ~ fpp_method_name }
+valid_method_suffix_char_seq = _{ valid_function_suffix_char_seq }
+fpp_method = {
+	  fpp_access_specifier?
+    ~ (fpp_implement_specifier | "inline")*
+    ~ template*
+    ~ attribute*
+    ~ ("static" | "inline" | fpp_noexport | "constexpr")*
+    ~ fpp_dependency?
+    ~ (return_type ~ &(attribute | fpp_method_core))?
+    ~ attribute*
+    ~ fpp_method_core
+    ~ balanced_parentheses ~ (!"{" ~ ANY)*
+    ~ (balanced_block | ("default" | "delete") ~ ";")
+}
+
+balanced_block = _{
+    "{"
+    ~ (
+          balanced_block
+        | STRING
+        | CHAR
+        | (!("{" | "}") ~ ANY)
+      )*
+    ~ "}"
+}
+
+balanced_parentheses = _{
+    "("
+    ~ (
+          balanced_parentheses
+        | STRING
+        | CHAR
+        | (!("(" | ")") ~ ANY)
+      )*
+    ~ ")"
+}
+
+balanced_angles = !{
+    "<"
+    ~ (
+          balanced_angles
+        | STRING
+        | CHAR
+        | (!("<" | ">") ~ ANY)
+      )*
+    ~ ">"
+}
+
+attribute = _{
+      "[["
+      ~ (
+            STRING
+          | CHAR
+          | (!("[[" | "]]") ~ ANY)
+        )*
+      ~ "]]"
+    | ("__attribute__" | "attribute") ~ balanced_parentheses
+}
+
+template = { "template" ~ balanced_angles }
+
+non_digit = _{ 'a'..'z' | 'A'..'Z' | "_" }
+
+digit = _{ '0'..'9' }
+
+nonzero_digit = _{ '1'..'9' }
+
+octal_digit = _{ '0'..'7' }
+
+hexadecimal_digit = _{ '0'..'9' | 'a'..'f' | 'A'..'F' }
+
+valid_guard_char_seq = _{
+	(
+    	  digit | non_digit
+        | "-"
+        | "{" | "}" | ","
+        | "!" | "||" | "&&"
+    )+
+}
+
+ffp_guard = {
+	(!"]" ~ valid_guard_char_seq+)
+}
+
+fpp_section_header = _{
+	  fpp_interface_header
+    | fpp_implementation_header
+}
+
+fpp_interface_header = _{
+	"INTERFACE" ~ ( "[" ~ ffp_guard ~ "]" )? ~ ":"
+}
+
+fpp_implementation_header = _{
+	"IMPLEMENTATION" ~ ( "[" ~ ffp_guard ~ "]" )? ~ ":"
+}
+
+fpp_interface_section = {
+	fpp_interface_header ~ (!fpp_section_header ~ declaration+)*
+}
+
+fpp_implementation_section = {
+	fpp_implementation_header ~ (!fpp_section_header ~ declaration+)*
+}

@@ -18,6 +18,7 @@ mod dispatch;
 mod global_state;
 mod handler;
 mod language_server_transport;
+mod preprocess;
 mod source_mapping;
 mod thread_worker;
 mod websocket_logger;

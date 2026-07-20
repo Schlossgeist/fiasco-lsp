@@ -17,11 +17,26 @@ method in other architectures are not displayed.
 The Fiasco LSP Proxy is a Rust application built with cargo, so nothing special
 there.
 
+### Testing
+Fiasco LSP Proxy is able to do the job of fiasco's preprocess tool internally.
+Testing this functionality requires the test files from the original fiasco repo.
+To get them, just run this in the root directory of this project:
+```bash
+git submodule update --init
+cd preprocess/
+git sparse-checkout set --no-cone tool/preprocess/test
+```
+You only need the subdirectory containing the test files, so a sparse checkout will suffice.
+
 ## Usage
 You have to either tell the LSP proxy a path to a Fiasco build directory using
 the `--build-dir` option. Or alternatively a path to the Fiasco source dir via
 `--fiasco-dir`, a Fiasco `globalconfig.out` via `--fiasco-config` and optionally
 a `Makeconf.local` via `--makeconf`.
+
+[WORK IN PROGRESS] The `--standalone` flag enables the internal implementation of Preprocess,
+thus removing the need to run Preprocess everytime your source and build directories
+are out of sync. This is the recommended way to use Fiasco LSP Proxy.
 
 Then, depending on your editor's preferences, it can communicate with the LSP
 proxy via:
