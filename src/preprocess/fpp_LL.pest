@@ -59,7 +59,7 @@ verbatim_copy = @{ (!(NEWLINE | FPP_RESERVED) ~ ANY)+ ~ NEWLINE }
 preprocess_line = @{ "#" ~ ("\\" ~ NEWLINE | !NEWLINE ~ ANY)* }
 extern_c = { "extern \"C\"" ~ balanced_block }
 
-declaration = _{
+declaration = {
       preprocess_line
     | fpp_class_or_struct
     | fpp_function
@@ -152,7 +152,7 @@ fpp_method = {
     ~ (balanced_block | ("default" | "delete") ~ ";")
 }
 
-balanced_block = _{
+balanced_block = {
     "{"
     ~ (
           balanced_block
@@ -163,7 +163,7 @@ balanced_block = _{
     ~ "}"
 }
 
-balanced_parentheses = _{
+balanced_parentheses = {
     "("
     ~ (
           balanced_parentheses
