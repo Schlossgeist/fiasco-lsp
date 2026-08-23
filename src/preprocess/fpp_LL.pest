@@ -23,6 +23,7 @@ CPP_RESERVED = @{
 	| "class"
     | "default"
     | "delete"
+    | "explicit"
     | "extern"
 	| "inline"
     | "operator"
@@ -143,7 +144,7 @@ fpp_method = {
     ~ (fpp_implement_specifier | "inline")*
     ~ template*
     ~ attribute*
-    ~ ("static" | "inline" | fpp_noexport | "constexpr")*
+    ~ ("static" | "inline" | fpp_noexport | "constexpr" | "explicit")*
     ~ fpp_dependency?
     ~ (return_type ~ &(attribute | fpp_method_core))?
     ~ attribute*

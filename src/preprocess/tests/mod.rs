@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
-use super::parser::{FPPParser, Rule};
+use super::generator::*;
+use super::parser::{parse_translation_unit};
 use pest::Parser;
 
 use rstest::rstest;
@@ -35,9 +36,21 @@ use rstest::rstest;
 #[case::test_variable               ("variable.cpp")]
 fn test_parse(#[case] path: &str) {
     let data_dir = Path::new("preprocess/tool/preprocess/test");
+    let source_file = data_dir.join(path);
     
-    let input = fs::read_to_string(&data_dir.join(path)).unwrap();
-    let result = FPPParser::parse(Rule::translation_unit, &input);
-
+    let input = fs::read_to_string(&source_file).unwrap();
+    let result = parse_translation_unit(&input);
+    
     assert!(result.is_ok());
+    
+    let source = Source::new(input);
+    
+    let cpp = generate_cpp_triple(source_file.file_stem().unwrap().to_str().unwrap(),
+                                  source,
+                                  Vec::new(),
+                                  result.unwrap());
+    
+    println!("{}", cpp.public_header);
+    println!("{}", cpp.private_header);
+    println!("{}", cpp.implementation);
 }
