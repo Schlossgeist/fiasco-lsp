@@ -50,6 +50,8 @@ struct Cli {
     makeconf: Option<PathBuf>,
     #[clap(long, requires = "fiasco_config")]
     stable_dir: Option<PathBuf>,
+    #[clap(long, conflicts_with = "build_dir")]
+    standalone: bool,
     /// Connect to LSP editor on port.
     #[clap(long)]
     connect: Option<u16>,

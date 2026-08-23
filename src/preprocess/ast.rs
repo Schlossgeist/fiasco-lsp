@@ -96,6 +96,7 @@ pub struct ClassOrStruct {
     pub name: Identifier,
     pub inheritance: Option<String>,
     pub body: String,
+    pub additional_methods: Vec<Method>,
 }
 
 pub struct ExternC {
@@ -225,6 +226,16 @@ pub enum MethodBody {
     Delete,
 }
 
+impl Display for MethodBody {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        match self { 
+            MethodBody::Definition(definition) => write!(f, "{}", definition),
+            MethodBody::Default => write!(f, " = default;"),
+            MethodBody::Delete => write!(f, " = delete;"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Method {
     pub span: SourceSpan,
@@ -239,9 +250,25 @@ pub struct Method {
     pub is_constexpr: bool,
     pub dependency: Option<Dependency>,
     pub return_type: Option<ReturnType>,
-    pub parent: String,
-    pub name: String,
-    pub parameters: String,
+    pub parent: SourceSpan,
+    pub name: SourceSpan,
+    pub parameters: Option<String>,
     pub suffix: String,
     pub body: MethodBody,
+}
+
+impl Method {
+    pub fn get_prefix_span(&self) -> SourceSpan {
+        SourceSpan{
+            start: self.span.start,
+            end: self.parent.start - 1,
+        }
+    }
+    
+    pub fn get_sanitized_prefix(&self, source: &str) -> String {
+        self.get_prefix_span().get(source).split_whitespace()
+            .filter(|word| !matches!(*word, "PUBLIC" | "PROTECTED" | "PRIVATE"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
