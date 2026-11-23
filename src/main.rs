@@ -18,7 +18,9 @@ mod dispatch;
 mod global_state;
 mod handler;
 mod language_server_transport;
+mod preprocess;
 mod source_mapping;
+mod standalone;
 mod thread_worker;
 mod websocket_logger;
 #[macro_use]
@@ -58,11 +60,29 @@ struct Cli {
     // TODO: Log client requests/answers to logger?!
     #[clap(long, value_name = "PORT", num_args = 0..=1, default_missing_value = "9981")]
     websocket_logger: Option<u16>,
+    /// Preprocess Fiasco sources in-process on every change instead of using
+    /// the output of Fiasco's external `preprocess` tool.
+    #[clap(long)]
+    standalone: bool,
+    /// Language server executable to start.
+    #[clap(long, default_value = "clangd")]
+    clangd: String,
+    /// Do not report diagnostics whose message matches this regular
+    /// expression to the client (repeatable), e.g. clang errors about GCC-only
+    /// compiler flags: --suppress-diagnostic "^Unsupported option"
+    #[clap(long = "suppress-diagnostic", value_name = "REGEX", value_parser = regex::Regex::new)]
+    suppress_diagnostic: Vec<regex::Regex>,
 }
 
 fn main() -> Result<()> {
     color_eyre::install()?;
     env_logger::init();
+
+    // `fiasco-lsp preprocess ...` is a drop-in replacement for Fiasco's preprocess tool.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("preprocess") {
+        std::process::exit(preprocess::cli::main(&args[2..])?);
+    }
 
     let cli: Cli = Cli::parse();
 
@@ -87,8 +107,16 @@ fn main() -> Result<()> {
     };
     debug!("Build directory: {}", build_env.build_dir.to_string_lossy());
 
-    info!("Generate compilation database");
-    build_env.gen_compile_commands();
+    let (source_mapping, standalone) = if cli.standalone {
+        info!("Generate compilation database and preprocess in-process (standalone mode)");
+        let mut standalone = standalone::Standalone::from_build(&build_env.build_dir)?;
+        let mapping = standalone.generate_all()?;
+        (mapping, Some(standalone))
+    } else {
+        info!("Generate compilation database");
+        build_env.gen_compile_commands();
+        (source_mapping::load_source_mapping(&build_env.build_dir), None)
+    };
 
     // Create the transport. Includes the stdio (stdin and stdout) versions but this could
     // also be implemented to use sockets or HTTP.
@@ -111,7 +139,7 @@ fn main() -> Result<()> {
     debug!("Client capabilities: {:#?}", client_capabilities);
     // TODO: Forward options to lsp...
     let server = language_server_transport::start(
-        "clangd",
+        &cli.clangd,
         &["--compile-commands-dir", build_env.build_dir.to_str().unwrap()],
     )?;
     let initialize_request = lsp_server::Request {
@@ -123,14 +151,21 @@ fn main() -> Result<()> {
     server.to_lang_server.sender().send(Message::Request(initialize_request))?;
     if let Message::Response(response) = server.from_lang_server.receiver().recv()? {
         let initialization_params = response.result.unwrap();
-        debug!("Server capabilities: {:#?}", client_capabilities);
+        debug!("Server capabilities: {:#?}", initialization_params);
+        let position_encoding = initialization_params
+            .pointer("/capabilities/positionEncoding")
+            .and_then(|e| serde_json::from_value(e.clone()).ok())
+            .unwrap_or(lsp_types::PositionEncodingKind::UTF16);
         connection.initialize_finish(response.id, initialization_params.clone())?;
-        let state = GlobalState::new(
+        let mut state = GlobalState::new(
             connection,
             server,
             logger,
-            source_mapping::load_source_mapping(&build_env.build_dir),
+            source_mapping,
+            standalone,
+            position_encoding,
         );
+        state.suppressed_diagnostics = cli.suppress_diagnostic.clone();
         main_loop(state, initialization_params)?;
         io_threads.join()?;
 
@@ -203,8 +238,7 @@ impl GlobalState {
             .on_many::<DidChangeTextDocument>(document_sync::handle_did_change_text_document)
             // TODO: Map TextDocumentIdentifier
             .forward::<WillSaveTextDocument>()
-            // TODO: Map TextDocumentIdentifier and text context
-            .forward::<DidSaveTextDocument>()
+            .on_many::<DidSaveTextDocument>(document_sync::handle_did_save_text_document)
             .on_many::<DidCloseTextDocument>(document_sync::handle_did_close_text_document)
             .forward::<DidChangeConfiguration>()
             // TODO: Translate FileEvent

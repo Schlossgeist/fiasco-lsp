@@ -17,7 +17,7 @@ generated deterministically by the upstream `combine.pl` and is not tracked
 upstream.
 
 `cargo test` parses each upstream `.cpp` test input (see
-`tests/preprocess_fixtures.rs`) and fails with a hint if the submodule is
+`src/preprocess/mod.rs`) and fails with a hint if the submodule is
 missing.
 
 To create the shared build directory (`--complete` also builds the kernel):

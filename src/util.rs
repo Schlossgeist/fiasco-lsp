@@ -139,6 +139,39 @@ impl FiascoSourceMapping {
         self.map_range_uri(direction, &mut location.uri, &mut location.range)
     }
 
+    /// Whether `uri` is a generated (preprocessed) file.
+    pub fn is_generated_uri(&self, uri: &Url) -> bool {
+        uri.scheme() == "file" && !self.map_files(MapDirection::FromPreprocess, uri.path()).is_empty()
+    }
+
+    /// Map a location reported by the server back to the sources. Locations
+    /// in other files (e.g. plain headers) are kept unchanged; returns false
+    /// only for locations in synthesized parts of generated files.
+    pub fn map_server_location(&self, location: &mut Location) -> bool {
+        if location.uri.scheme() != "file" || !self.is_generated_uri(&location.uri) {
+            return true;
+        }
+        self.map_location(MapDirection::FromPreprocess, location).is_ok()
+    }
+
+    /// Like `map_server_location`, but for locations in synthesized parts of
+    /// generated files (e.g. the start of a generated header, which is what an
+    /// `#include` resolves to), fall back to the start of the first source
+    /// file the generated file originates from instead of failing.
+    pub fn map_server_location_or_file(&self, location: &mut Location) -> bool {
+        if self.map_server_location(location) {
+            return true;
+        }
+        match self.map_files(MapDirection::FromPreprocess, location.uri.path()).first() {
+            None => false,
+            Some(file) => {
+                location.uri = Url::from_file_path(file).unwrap();
+                location.range = Range::default();
+                true
+            }
+        }
+    }
+
     pub fn map_file_range(
         &self,
         direction: MapDirection,

@@ -1,11 +1,14 @@
 use std::any::Any;
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use color_eyre::eyre::Result;
 use lsp_server::{Connection, RequestId};
+use lsp_types::PositionEncodingKind;
 
 use crate::language_server_transport::LanguageServerTransport;
 use crate::source_mapping::FiascoSourceMapping;
+use crate::standalone::Standalone;
 use crate::websocket_logger::Logger;
 
 #[derive(Clone, Copy)]
@@ -74,6 +77,18 @@ pub struct GlobalState {
     pub client_reqs: RequestRegistry,
     pub server_reqs: RequestRegistry,
     pub next_req_id: u32,
+    /// In-process preprocessing (`--standalone`).
+    pub standalone: Option<Standalone>,
+    /// Position encoding negotiated between client and server.
+    pub position_encoding: PositionEncodingKind,
+    /// Versions of generated documents sent to the server (standalone mode).
+    pub server_versions: HashMap<PathBuf, i32>,
+    /// Generated documents opened in the server on behalf of a source file.
+    pub opened_for: HashMap<PathBuf, HashSet<PathBuf>>,
+    /// Mapped diagnostics of each source file, by the file they originate from.
+    pub diagnostics: HashMap<PathBuf, HashMap<PathBuf, Vec<lsp_types::Diagnostic>>>,
+    /// Diagnostics with a matching message are not reported to the client.
+    pub suppressed_diagnostics: Vec<regex::Regex>,
 }
 
 impl GlobalState {
@@ -82,6 +97,8 @@ impl GlobalState {
         server: LanguageServerTransport,
         logger: Option<Logger>,
         source_mapping: FiascoSourceMapping,
+        standalone: Option<Standalone>,
+        position_encoding: PositionEncodingKind,
     ) -> GlobalState {
         GlobalState {
             client,
@@ -92,6 +109,12 @@ impl GlobalState {
             client_reqs: RequestRegistry::new(),
             server_reqs: RequestRegistry::new(),
             next_req_id: 0,
+            standalone,
+            position_encoding,
+            server_versions: HashMap::new(),
+            opened_for: HashMap::new(),
+            diagnostics: HashMap::new(),
+            suppressed_diagnostics: Vec::new(),
         }
     }
 

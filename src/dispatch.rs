@@ -193,6 +193,7 @@ impl<'a> ResponseDispatcher<'a> {
 
         // Forward errors
         if res.error.is_some() {
+            warn!("[{}] Forwarding error response from {}: {:?}", R::METHOD, self.direction, &res.error);
             self.send_res(res);
             return self;
         }
@@ -204,7 +205,7 @@ impl<'a> ResponseDispatcher<'a> {
                 self.send_res(build_res(id, mapped));
             }
             Err(err) => {
-                warn!("Received malformed response from {}: {}", self.direction, err);
+                warn!("[{}] Dropping malformed response from {}: {}", R::METHOD, self.direction, err);
                 // TODO: Can / have we to report something to the sender?
             }
         };

@@ -12,8 +12,7 @@ pub fn handle_res_workspace_symbol(
     match &mut result {
         WorkspaceSymbolResponse::Flat(symbols) => {
             symbols.retain_mut(|symbol| {
-                if state.source_mapping.map_location(FromPreprocess, &mut symbol.location).is_err()
-                {
+                if !state.source_mapping.map_server_location(&mut symbol.location) {
                     warn!("Drop {} due to map location error.", &symbol.name);
                     return false;
                 }
@@ -24,7 +23,7 @@ pub fn handle_res_workspace_symbol(
             symbols.retain_mut(|symbol| {
                 match &mut symbol.location {
                     OneOf::Left(location) => {
-                        if state.source_mapping.map_location(FromPreprocess, location).is_err() {
+                        if !state.source_mapping.map_server_location(location) {
                             warn!("Drop {} due to map location error.", &symbol.name);
                             return false;
                         }

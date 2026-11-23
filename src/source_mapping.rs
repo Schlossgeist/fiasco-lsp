@@ -12,12 +12,22 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PreprocessSection {
     None,
     Interface,
     Implementation,
+    /// Member/function declarations synthesized from a definition's head.
+    /// Lowest priority, so source positions prefer the definition.
+    Declaration,
 }
+
+const SECTION_PRIORITY: [PreprocessSection; 4] = [
+    PreprocessSection::Implementation,
+    PreprocessSection::Interface,
+    PreprocessSection::None,
+    PreprocessSection::Declaration,
+];
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LineMapping {
@@ -45,6 +55,8 @@ pub struct FileLineMappings {
     none: Vec<LineMapping>,
     interface: Vec<LineMapping>,
     implementation: Vec<LineMapping>,
+    #[serde(default)]
+    declaration: Vec<LineMapping>,
     length: u32,
 }
 
@@ -55,6 +67,7 @@ impl FileLineMappings {
             none: Vec::new(),
             interface: Vec::new(),
             implementation: Vec::new(),
+            declaration: Vec::new(),
             length: 0,
         }
     }
@@ -72,6 +85,7 @@ impl FileLineMappings {
             PreprocessSection::None => &mut self.none,
             PreprocessSection::Interface => &mut self.interface,
             PreprocessSection::Implementation => &mut self.implementation,
+            PreprocessSection::Declaration => &mut self.declaration,
         }
     }
 
@@ -80,6 +94,7 @@ impl FileLineMappings {
             PreprocessSection::None => &self.none,
             PreprocessSection::Interface => &self.interface,
             PreprocessSection::Implementation => &self.implementation,
+            PreprocessSection::Declaration => &self.declaration,
         }
     }
 
@@ -97,23 +112,44 @@ impl FileLineMappings {
         self.none.sort_by_key(|l| l.src_line);
         self.interface.sort_by_key(|l| l.src_line);
         self.implementation.sort_by_key(|l| l.src_line);
+        self.declaration.sort_by_key(|l| l.src_line);
     }
 
-    fn check(&self, source: &Path) {
-        let check_section = |section: &[LineMapping]| {
-            section.windows(2).for_each(|w| {
-                assert!(
-                    w[0].src_end_line <= w[1].src_line,
-                    "Ranges overlap in {:?}: a = {:#?}, b = {:#?}",
-                    source,
-                    w[0],
-                    w[1]
-                )
-            })
-        };
-        check_section(&self.none);
-        check_section(&self.interface);
-        check_section(&self.implementation);
+    /// Remove mappings that overlap an earlier mapping of the same section
+    /// (the lookup relies on non-overlapping ranges). Requires sorted mappings.
+    ///
+    /// Overlaps happen e.g. for the `#line` directives of the reference tool
+    /// when a member function is defined in an INTERFACE section: its
+    /// definition and its synthesized declaration then both map the head
+    /// lines in the same section. The earlier range (the definition, which
+    /// includes the head) is kept. With `touching_ok`, a range may start on
+    /// the last line of the previous one (the legacy `#line` mappings
+    /// overlap by one line at their boundaries).
+    fn remove_overlaps(&mut self, file: &Path, touching_ok: bool) {
+        for section in SECTION_PRIORITY {
+            let mappings = self.access(section);
+            let mut kept: Vec<LineMapping> = Vec::with_capacity(mappings.len());
+            for mapping in mappings.drain(..) {
+                if let Some(last) = kept.last() {
+                    let overlaps = if touching_ok {
+                        mapping.src_line < last.src_end_line
+                    } else {
+                        mapping.src_line <= last.src_end_line
+                    };
+                    if overlaps {
+                        warn!(
+                            "Dropping mapping overlapping an earlier one in {}: {:?} overlaps {:?}",
+                            file.display(),
+                            mapping,
+                            last
+                        );
+                        continue;
+                    }
+                }
+                kept.push(mapping);
+            }
+            *self.access(section) = kept;
+        }
     }
 
     fn length(&self) -> u32 {
@@ -142,12 +178,95 @@ pub struct SourceLocation {
     pub character: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedRange {
+    pub section: PreprocessSection,
+    pub source_file: PathBuf,
+    pub source_line: u32,
+    pub generated_file: PathBuf,
+    pub generated_line: u32,
+    pub line_count: u32,
+}
+
 impl FiascoSourceMapping {
     fn new() -> FiascoSourceMapping {
         FiascoSourceMapping {
             to_preprocess: LineMappings::new(),
             from_preprocess: LineMappings::new(),
         }
+    }
+
+    pub fn from_generated_ranges(
+        ranges: impl IntoIterator<Item = GeneratedRange>,
+    ) -> Result<Self, String> {
+        let mut result = Self::new();
+        result.insert_generated_ranges(ranges)?;
+        Ok(result)
+    }
+
+    pub fn empty() -> Self {
+        Self::new()
+    }
+
+    /// Replace all mappings of the given source and generated files (e.g. the
+    /// inputs and outputs of one preprocess run) with `ranges`.
+    pub fn replace_generated_ranges(
+        &mut self,
+        sources: &[PathBuf],
+        generated: &[PathBuf],
+        ranges: impl IntoIterator<Item = GeneratedRange>,
+    ) -> Result<(), String> {
+        for source in sources {
+            self.to_preprocess.remove(source);
+        }
+        for file in generated {
+            self.from_preprocess.remove(file);
+        }
+        self.insert_generated_ranges(ranges)
+    }
+
+    fn insert_generated_ranges(
+        &mut self,
+        ranges: impl IntoIterator<Item = GeneratedRange>,
+    ) -> Result<(), String> {
+        let mut touched = (HashSet::new(), HashSet::new());
+        for range in ranges {
+            let offset = range.line_count.checked_sub(1).ok_or("empty mapping range")?;
+            let source_end =
+                range.source_line.checked_add(offset).ok_or("source mapping overflow")?;
+            let generated_end =
+                range.generated_line.checked_add(offset).ok_or("generated mapping overflow")?;
+            touched.0.insert(range.source_file.clone());
+            touched.1.insert(range.generated_file.clone());
+            self.to_preprocess
+                .entry(range.source_file.clone())
+                .or_insert_with(FileLineMappings::new)
+                .push(LineMapping {
+                    section: range.section,
+                    src_line: range.source_line,
+                    src_end_line: source_end,
+                    dst_file: range.generated_file.clone(),
+                    dst_line: range.generated_line,
+                });
+            self.from_preprocess
+                .entry(range.generated_file)
+                .or_insert_with(FileLineMappings::new)
+                .push(LineMapping {
+                    section: range.section,
+                    src_line: range.generated_line,
+                    src_end_line: generated_end,
+                    dst_file: range.source_file,
+                    dst_line: range.source_line,
+                });
+        }
+        for (files, paths) in [(&mut self.to_preprocess, &touched.0), (&mut self.from_preprocess, &touched.1)] {
+            for path in paths {
+                let mappings = files.get_mut(path).unwrap();
+                mappings.sort();
+                mappings.remove_overlaps(path, false);
+            }
+        }
+        Ok(())
     }
 
     fn sort(&mut self) {
@@ -159,12 +278,9 @@ impl FiascoSourceMapping {
         }
     }
 
-    fn check(&self) {
-        for (path, mappings) in &self.to_preprocess {
-            mappings.check(&path)
-        }
-        for (path, mappings) in &self.from_preprocess {
-            mappings.check(&path)
+    fn remove_overlaps(&mut self) {
+        for (path, mappings) in self.to_preprocess.iter_mut().chain(self.from_preprocess.iter_mut()) {
+            mappings.remove_overlaps(path, true)
         }
     }
 
@@ -236,12 +352,9 @@ impl FiascoSourceMapping {
     ) -> Option<SourceLocation> {
         let line_mappings = self.get(direction);
         // TODO: Priority to use here? Might depend on use case...
-        let mapping =
-            Self::find_mapping(line_mappings, path, line, PreprocessSection::Implementation)
-                .or_else(|| {
-                    Self::find_mapping(line_mappings, path, line, PreprocessSection::Interface)
-                })
-                .or_else(|| Self::find_mapping(line_mappings, path, line, PreprocessSection::None));
+        let mapping = SECTION_PRIORITY
+            .iter()
+            .find_map(|&section| Self::find_mapping(line_mappings, path, line, section));
         match mapping {
             None => {
                 debug!("No mapping found for Line {} ({})", line, path);
@@ -270,15 +383,9 @@ impl FiascoSourceMapping {
         end: u32,
     ) -> HashSet<&Path> {
         let line_mappings = self.get(direction);
-        Self::iter_mappings(line_mappings, path, start, end, PreprocessSection::Implementation)
-            .chain(Self::iter_mappings(
-                line_mappings,
-                path,
-                start,
-                end,
-                PreprocessSection::Interface,
-            ))
-            .chain(Self::iter_mappings(line_mappings, path, start, end, PreprocessSection::None))
+        SECTION_PRIORITY
+            .iter()
+            .flat_map(|&section| Self::iter_mappings(line_mappings, path, start, end, section))
             .map(|mapping| mapping.dst_file.as_ref())
             .collect()
     }
@@ -423,7 +530,7 @@ pub fn load_source_mapping(build_dir: &Path) -> FiascoSourceMapping {
     }
     */
     source_mapping.sort();
-    source_mapping.check();
+    source_mapping.remove_overlaps();
     source_mapping
 }
 
@@ -433,6 +540,57 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn generated_ranges_map_both_directions_and_validate_bounds() {
+        let range = || GeneratedRange {
+            section: PreprocessSection::Interface,
+            source_file: "source.cpp".into(),
+            source_line: 4,
+            generated_file: "generated.h".into(),
+            generated_line: 10,
+            line_count: 2,
+        };
+        let mapping = FiascoSourceMapping::from_generated_ranges([range()]).unwrap();
+        let generated = mapping.map(MapDirection::ToPreprocess, "source.cpp", 5, 3).unwrap();
+        assert_eq!(
+            (generated.path, generated.line, generated.character),
+            ("generated.h".into(), 11, 3)
+        );
+        let source = mapping.map(MapDirection::FromPreprocess, "generated.h", 10, 7).unwrap();
+        assert_eq!((source.path, source.line, source.character), ("source.cpp".into(), 4, 7));
+        assert!(mapping.map(MapDirection::ToPreprocess, "source.cpp", 6, 0).is_none());
+        // Overlapping ranges are dropped instead of failing.
+        let duplicate = FiascoSourceMapping::from_generated_ranges([range(), range()]).unwrap();
+        assert_eq!(duplicate.to_preprocess[Path::new("source.cpp")].interface.len(), 1);
+        let mut empty = range();
+        empty.line_count = 0;
+        assert!(FiascoSourceMapping::from_generated_ranges([empty]).is_err());
+    }
+
+    /// Perl `preprocess` output for a member function defined in an INTERFACE
+    /// section: its definition and declaration overlap in the same section.
+    #[test]
+    fn loads_overlapping_line_directives() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("auto")).unwrap();
+        let header = "// AUTOMATICALLY GENERATED -- DO NOT EDIT!         -*- c++ -*-\n\n#pragma once\n\
+            #line 2 \"src.cpp\"\n\n#include \"types.h\"\n\n//\n// INTERFACE definition follows\n//\n\n\
+            #line 4 \"src.cpp\"\n\nclass Cpubits\n{\npublic:\n  int x;\n\npublic:  \n\
+            #line 13 \"src.cpp\"\n  static inline bool has_16bit_asids();\n};\n\n\
+            #line 11 \"src.cpp\"\n\n\ninline bool Cpubits::has_16bit_asids()\n{\n  return true;\n}\n";
+        fs::write(dir.path().join("auto/cpubits.h"), header).unwrap();
+        let mapping = load_source_mapping(dir.path());
+        let generated = dir.path().join("auto/cpubits.h");
+        let lines: Vec<&str> = header.lines().collect();
+        // The head line of the definition (source line 13) maps to the definition.
+        let target = mapping.map(MapDirection::ToPreprocess, "src.cpp", 12, 0).unwrap();
+        assert_eq!(lines[target.line as usize], "inline bool Cpubits::has_16bit_asids()");
+        // The declaration still maps back to the source.
+        let declaration = lines.iter().position(|l| l.contains("static inline bool")).unwrap() as u32;
+        let source = mapping.map(MapDirection::FromPreprocess, generated.to_str().unwrap(), declaration, 2).unwrap();
+        assert_eq!((source.path, source.line), ("src.cpp".into(), 12));
+    }
 
     /// The Fiasco build directory shared by all tests, created from the
     /// `tests/fixtures/fiasco` submodule by `tests/fiasco_build.py --complete`.
@@ -456,12 +614,12 @@ mod tests {
     fn load() {
         let source_mapping = load_source_mapping(&build_dir());
         serde_json::to_writer_pretty(
-            BufWriter::new(File::create("source_to_preprocess.json").unwrap()),
+            BufWriter::new(File::create(build_dir().join("source_to_preprocess.json")).unwrap()),
             &source_mapping.to_preprocess,
         )
         .unwrap();
         serde_json::to_writer_pretty(
-            BufWriter::new(File::create("preprocess_to_source.json").unwrap()),
+            BufWriter::new(File::create(build_dir().join("preprocess_to_source.json")).unwrap()),
             &source_mapping.from_preprocess,
         )
         .unwrap();

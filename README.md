@@ -27,8 +27,8 @@ project:
 git submodule update --init --remote --depth 1
 ```
 The submodule tracks the tip of Fiasco's `master` branch, so rerun this command
-to update it to the latest upstream state. Afterward, `cargo test` parses every upstream `preprocess` test input with the
-tree-sitter-fpp grammar.
+to update it to the latest upstream state. Afterward, `cargo test` runs the
+parser against every upstream `preprocess` test input.
 
 Tests that need a Fiasco build directory share one at `tests/fixtures/build`
 (or `$FIASCO_BUILD_DIR`), which `tests/fiasco_build.py` creates from the
@@ -38,7 +38,8 @@ build the kernel, which the ignored Rust tests require:
 tests/fiasco_build.py --complete
 cargo test -- --ignored
 ```
-`tests/standalone_e2e.py` creates the build directory on demand. See
+`tests/standalone_e2e.py` is an end-to-end test of the standalone mode with
+clangd, which creates the build directory on demand. See
 `tests/fixtures/README.md` for the reference comparison harnesses.
 
 ## Usage
@@ -53,6 +54,52 @@ proxy via:
 - `--connect <port>`: Connect to LSP-enabled editor on port
 - `--listen <port>`: Listen for LSP-enabled editor on port
 
+Use `--clangd <path>` to select the language server executable (default:
+`clangd`).
+
+Diagnostics whose message matches a regular expression given with
+`--suppress-diagnostic <regex>` (repeatable) are not reported to the editor.
+This is useful for errors about compiler flags clang does not support, as
+Fiasco is built with GCC, e.g. `--suppress-diagnostic '^Unsupported option'`
+for `-freg-struct-return` on amd64.
+
+### Standalone mode
+With `--standalone`, the proxy does not depend on the output of Fiasco's Perl
+`preprocess` tool. Instead, it contains its own implementation, based on the
+[tree-sitter-fpp](https://github.com/Schlossgeist/tree-sitter-fpp) grammar,
+which re-runs on every change of a source file:
+
+1. At startup, Fiasco's build system is run with `PREPROCESS` pointing to
+   `fiasco-lsp preprocess` (see below). This generates `auto/` and
+   `compile_commands.json` as usual, and records every preprocess invocation
+   (module, flags, enabled tags, input files), so module composition, `VPATH`
+   resolution and tag selection stay entirely in the hands of the build system.
+2. Each change of an opened source file regenerates its module in memory. The
+   updated generated files are sent to the language server, written to `auto/`
+   (so the language server also sees current versions of headers that are not
+   open), and the line mapping is updated.
+3. Diagnostics of the preprocessing itself (e.g. `Class X has not been
+   declared`) are reported alongside the language server's diagnostics.
+
+The generated code never reformats source lines: FPP keywords such as `PUBLIC`
+or `NEEDS[...]`, class qualifiers in synthesized member declarations, or default
+arguments in definitions are replaced by blanks, and `TAG_ENABLED(...)` by an
+equally wide `true`/`false`. Hence every generated line corresponds to one
+source line with identical columns, including the in-class declarations
+synthesized from `PUBLIC`/`PROTECTED`/`PRIVATE` definitions.
+
+Note that standalone mode writes the generated files to the `auto/` directory of
+the build directory, like a regular build would (without `#line` directives).
+
+### Preprocess command
+`fiasco-lsp preprocess [options] files...` is a drop-in replacement for Fiasco's
+`tool/preprocess/src/preprocess` with the same command line options, so it can
+also be used for building Fiasco: `make PREPROCESS=/path/to/wrapper`, where the
+wrapper script runs `exec fiasco-lsp preprocess "$@"`. For the default amd64
+configuration, all generated files match the reference tool on token level
+(except for the order of equivalent specifiers in three files), and the kernel
+built with it is functionally identical.
+
 ## What Works
 - Navigation (e.g. goto, find references, ...)
 - Code diagnostics
@@ -60,12 +107,11 @@ proxy via:
 - Code actions suggested by the language server can be executed (experimental)
 - Source code changes that do not change the number of lines in the file, thus
   do not require an update of the line mapping, are possible (experimental)
+- Arbitrary source code changes with `--standalone`
 
 ## Next Steps
-- Synchronization of source file changes made in text editor, with the language
-  server and the internal mapping of the LSP proxy. The biggest hurdle here is
-  certainly the correct synchronization of the internal mapping used by the LSP
-  proxy, as it requires a re-execution of preprocess.
+- Synchronization of source file changes without `--standalone` (would require
+  re-executing the external preprocess tool).
 - Implement support for more LSP requests/responses.
 - Build system integration
 - Support multiple configurations at same time?
