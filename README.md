@@ -57,6 +57,22 @@ proxy via:
 Use `--clangd <path>` to select the language server executable (default:
 `clangd`).
 
+By default, nothing is logged. Log output is never written to stdout, which
+carries the LSP communication when using stdin/stdout, or to stderr. Use
+`--log-output <path>` to append it to a file, or `--log-output <host>:<port>`
+(e.g. `--log-output localhost:1337`) to send it to a TCP socket, for example to
+`nc -lk 1337`. The connection is established on demand, so the listener can be
+started or restarted at any time; until it is available, the most recent log
+output (up to 1 MiB) is buffered. To write to a file whose name looks like
+`<host>:<port>`, prefix it with a directory, e.g. `./localhost:1337`. The
+stderr output of clangd is forwarded to the log, and panics are logged in
+addition to the panic report on stderr. stderr is never redirected.
+
+Logging is configured via `RUST_LOG` as usual; the default is
+`info,goto=debug`, which includes the raw and mapped responses of goto
+requests (go to definition/declaration/...). Use e.g. `RUST_LOG=info` to
+disable those.
+
 Diagnostics whose message matches a regular expression given with
 `--suppress-diagnostic <regex>` (repeatable) are not reported to the editor.
 This is useful for errors about compiler flags clang does not support, as

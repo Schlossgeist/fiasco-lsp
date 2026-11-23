@@ -9,12 +9,15 @@ directory shared by all tests is used, which is created from the
 `tests/fixtures/fiasco` submodule if needed (see `tests/fiasco_build.py`).
 The test edits
 `kern/ram_quota.cpp` in the editor only (the file on disk is not modified)
-and checks navigation, line mapping after edits, and diagnostics.
+and checks navigation, line mapping after edits, and diagnostics. The log
+output of the proxy is sent to a socket (`--log-output HOST:PORT`) and stdout
+must only carry LSP messages.
 """
 
 import argparse
 import json
 import queue
+import socket
 import subprocess
 import sys
 import threading
@@ -24,12 +27,30 @@ from pathlib import Path
 import fiasco_build
 
 
+class LogListener:
+    """Collects everything sent to a local TCP socket."""
+
+    def __init__(self):
+        self.server = socket.create_server(("127.0.0.1", 0))
+        self.address = "127.0.0.1:%d" % self.server.getsockname()[1]
+        self.data = bytearray()
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            connection, _ = self.server.accept()
+            with connection:
+                while chunk := connection.recv(65536):
+                    self.data += chunk
+
+
 class Client:
     def __init__(self, command, root):
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr)
         self.messages = queue.Queue()
         self.next_id = 1
         self.versions = {}
+        self.protocol_errors = []
         threading.Thread(target=self._read, daemon=True).start()
         self.request("initialize", {
             "processId": None, "rootUri": root.as_uri(),
@@ -38,6 +59,8 @@ class Client:
         self.notify("initialized", {})
 
     def _read(self):
+        # Anything on stdout that is not an LSP message (e.g. log output) is a
+        # protocol error.
         stream = self.process.stdout
         while True:
             headers = {}
@@ -45,11 +68,17 @@ class Client:
                 line = stream.readline()
                 if not line:
                     return
-                if line in (b"\r\n", b"\n"):
+                if line == b"\r\n":
                     break
-                key, value = line.decode().split(":", 1)
+                key, separator, value = line.decode(errors="replace").partition(":")
+                if not separator or not line.endswith(b"\r\n"):
+                    self.protocol_errors.append(line)
+                    continue
                 headers[key.lower()] = value.strip()
-            self.messages.put(json.loads(stream.read(int(headers["content-length"]))))
+            try:
+                self.messages.put(json.loads(stream.read(int(headers["content-length"]))))
+            except (KeyError, ValueError) as e:
+                self.protocol_errors.append(f"{e}: {headers}")
 
     def _send(self, message):
         body = json.dumps({"jsonrpc": "2.0", **message}).encode()
@@ -130,9 +159,10 @@ def main():
     build = (options.build_dir or fiasco_build.configured_build_dir()).resolve()
 
     started = time.monotonic()
+    log = LogListener()
     # Fiasco is built with GCC; clang rejects some of its flags (e.g. `-freg-struct-return` on x86-64).
     client = Client([options.proxy, "--build-dir", str(build), "--standalone", "--clangd", options.clangd,
-                     "--suppress-diagnostic", "^Unsupported option"], build)
+                     "--suppress-diagnostic", "^Unsupported option", "--log-output", log.address], build)
     print(f"initialized after {time.monotonic() - started:.1f}s")
     # The `source` link is created by the build system during startup.
     source = (build / "source").resolve() / "kern/ram_quota.cpp"
@@ -190,6 +220,9 @@ def main():
         ok = check(False, f"timeout: {e}")
     finally:
         client.shutdown()
+    ok &= check(not client.protocol_errors, f"stdout only carries LSP messages: {client.protocol_errors[:5]}")
+    ok &= check(b"Fiasco LSP Proxy" in log.data and b"Recorded" in log.data,
+                f"log output received via socket ({len(log.data)} bytes)")
     print(f"total {time.monotonic() - started:.1f}s")
     return 0 if ok else 1
 

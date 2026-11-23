@@ -7,7 +7,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Parser};
-use color_eyre::eyre::Result;
+use color_eyre::eyre::{Result, WrapErr};
 use crossbeam_channel::select;
 use lsp_server::{Connection, Message};
 use lsp_types::request::{Initialize, Request};
@@ -18,6 +18,7 @@ mod dispatch;
 mod global_state;
 mod handler;
 mod language_server_transport;
+mod log_output;
 mod preprocess;
 mod source_mapping;
 mod standalone;
@@ -33,6 +34,7 @@ use crate::global_state::{
     GlobalState, ReqContext,
 };
 use crate::handler::*;
+use crate::log_output::LogOutput;
 use crate::source_mapping::MapDirection::ToPreprocess;
 use crate::websocket_logger::Logger;
 
@@ -72,21 +74,62 @@ struct Cli {
     /// compiler flags: --suppress-diagnostic "^Unsupported option"
     #[clap(long = "suppress-diagnostic", value_name = "REGEX", value_parser = regex::Regex::new)]
     suppress_diagnostic: Vec<regex::Regex>,
+    /// Write log output to this file (appending) or, if given as HOST:PORT
+    /// (e.g. localhost:1337), send it to this TCP socket. Without this
+    /// option, nothing is logged. Log output is never written to stdout,
+    /// which carries the LSP communication with the stdio transport, or
+    /// stderr. The log level is set via RUST_LOG (default: "info,goto=debug").
+    #[clap(long, value_name = "PATH|HOST:PORT")]
+    log_output: Option<LogOutput>,
+}
+
+/// Default log filter if `RUST_LOG` is not set: everything from `info` on,
+/// plus the detailed traces of the goto handler.
+const DEFAULT_LOG_FILTER: &str = "info,goto=debug";
+
+/// Sets up logging to `output`. Without an output, no logger is installed,
+/// so nothing is logged at all (neither to stdout nor to stderr).
+///
+/// Write errors of the logger are ignored.
+fn init_logging(output: Option<&LogOutput>) -> Result<()> {
+    let Some(output) = output else {
+        log::set_max_level(log::LevelFilter::Off);
+        return Ok(());
+    };
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(DEFAULT_LOG_FILTER))
+        .format_timestamp_millis()
+        .target(env_logger::Target::Pipe(output.open()?))
+        .write_style(env_logger::WriteStyle::Never)
+        .try_init()
+        .wrap_err("Cannot initialize logger")?;
+    Ok(())
+}
+
+/// Additionally logs panics, so they show up in the log output (the panic
+/// report itself is still printed on stderr by the panic hook).
+fn log_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        error!("{info}");
+        previous(info);
+    }));
 }
 
 fn main() -> Result<()> {
-    color_eyre::install()?;
-    env_logger::init();
-
     // `fiasco-lsp preprocess ...` is a drop-in replacement for Fiasco's preprocess tool.
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("preprocess") {
+        color_eyre::install()?;
+        env_logger::init();
         std::process::exit(preprocess::cli::main(&args[2..])?);
     }
 
     let cli: Cli = Cli::parse();
+    color_eyre::install()?;
+    // stdout is reserved for the LSP communication, see `init_logging`.
+    init_logging(cli.log_output.as_ref())?;
+    log_panics();
 
-    // Note that  we must have our logging only write out to stderr.
     info!("Fiasco LSP Proxy");
 
     let logger = if let Some(logger_port) = cli.websocket_logger {
