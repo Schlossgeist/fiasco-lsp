@@ -430,20 +430,31 @@ pub fn load_source_mapping(build_dir: &Path) -> FiascoSourceMapping {
 #[cfg(test)]
 mod tests {
     use std::io::BufWriter;
+    use std::path::PathBuf;
 
     use super::*;
 
-    #[test]
-    fn load_mods() {
-        let modules = load_modules("/home/george/kk/build/build-fiasco-arm64/auto/");
-        env_logger::init();
-        println!("{:?}", modules);
+    /// The Fiasco build directory shared by all tests, created from the
+    /// `tests/fixtures/fiasco` submodule by `tests/fiasco_build.py --complete`.
+    fn build_dir() -> PathBuf {
+        std::env::var_os("FIASCO_BUILD_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/build"))
     }
 
     #[test]
+    #[ignore = "requires a complete Fiasco build directory (tests/fiasco_build.py --complete)"]
+    fn load_mods() {
+        let modules = load_modules(build_dir().to_str().unwrap());
+        let _ = env_logger::try_init();
+        println!("{:?}", modules);
+        assert!(!modules.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires a complete Fiasco build directory (tests/fiasco_build.py --complete)"]
     fn load() {
-        let source_mapping =
-            load_source_mapping(Path::new("/home/george/kk/build/build-fiasco-arm64/auto/"));
+        let source_mapping = load_source_mapping(&build_dir());
         serde_json::to_writer_pretty(
             BufWriter::new(File::create("source_to_preprocess.json").unwrap()),
             &source_mapping.to_preprocess,
@@ -455,14 +466,19 @@ mod tests {
         )
         .unwrap();
 
-        env_logger::init();
+        let _ = env_logger::try_init();
+        let source = source_mapping
+            .to_preprocess
+            .keys()
+            .find(|path| path.ends_with("kern/ram_quota.cpp"))
+            .expect("kern/ram_quota.cpp is mapped");
+        let line = fs::read_to_string(source)
+            .unwrap()
+            .lines()
+            .position(|line| line.starts_with("class Ram_quota"))
+            .expect("class Ram_quota is declared") as u32;
         let mut mapped = source_mapping
-            .map(
-                MapDirection::ToPreprocess,
-                "/home/george/kk/dev/l4re/fiasco/src/kern/arm/cpu-arm.cpp",
-                367,
-                10,
-            )
+            .map(MapDirection::ToPreprocess, source.to_str().unwrap(), line, 0)
             .expect("Valid mapping.");
         mapped.line += 1;
         mapped.character += 1;

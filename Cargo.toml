@@ -19,3 +19,8 @@ serde = "1.0.228"
 serde_json = "1.0.149"
 tempfile = "3.24.0"
 tungstenite = "0.28.0"
+
+[dev-dependencies]
+rstest = "0.26.1"
+tree-sitter = "0.26.5"
+tree-sitter-fpp = { git = "https://github.com/Schlossgeist/tree-sitter-fpp", rev = "6dbc824b041fd9756f8a45841f4f6a5d5b5fd55c" }

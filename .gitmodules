@@ -1,0 +1,5 @@
+[submodule "tests/fixtures/fiasco"]
+	path = tests/fixtures/fiasco
+	url = https://github.com/kernkonzept/fiasco.git
+	shallow = true
+	branch = master
